@@ -1,26 +1,51 @@
-const api = {
-  async get(url) {
-    const response = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      headers: {
-        Accept: "application/json"
-      }
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(
-        data.error || `Request failed (${response.status})`
-      );
+async function request(
+  url,
+  options = {}
+) {
+  const response = await fetch(url, {
+    credentials: "include",
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {})
     }
+  });
 
-    return data;
+  const data =
+    await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const error = new Error(
+      data.error ||
+        `Request failed (${response.status})`
+    );
+
+    error.status = response.status;
+    error.data = data;
+
+    throw error;
+  }
+
+  return data;
+}
+
+const api = {
+  get(url) {
+    return request(url, {
+      method: "GET"
+    });
   },
 
   async getProfile() {
-    return this.get("/api/youtube/profile");
+    return request(
+      "/api/youtube/profile"
+    );
+  },
+
+  async getMe() {
+    return request(
+      "/api/youtube/me"
+    );
   },
 
   async getPlaylists({
@@ -32,10 +57,13 @@ const api = {
     });
 
     if (pageToken) {
-      params.set("pageToken", pageToken);
+      params.set(
+        "pageToken",
+        pageToken
+      );
     }
 
-    return this.get(
+    return request(
       `/api/youtube/playlists?${params.toString()}`
     );
   },
@@ -48,7 +76,9 @@ const api = {
     } = {}
   ) {
     if (!playlistId) {
-      throw new Error("playlistId is required.");
+      throw new Error(
+        "playlistId is required."
+      );
     }
 
     const params = new URLSearchParams({
@@ -57,16 +87,23 @@ const api = {
     });
 
     if (pageToken) {
-      params.set("pageToken", pageToken);
+      params.set(
+        "pageToken",
+        pageToken
+      );
     }
 
-    return this.get(
+    return request(
       `/api/youtube/playlist-items?${params.toString()}`
     );
   },
 
-  async search(query, maxResults = 20) {
-    const cleanQuery = query?.trim();
+  async search(
+    query,
+    maxResults = 20
+  ) {
+    const cleanQuery =
+      query?.trim() || "";
 
     if (!cleanQuery) {
       return {
@@ -81,21 +118,27 @@ const api = {
       maxResults: String(maxResults)
     });
 
-    return this.get(
+    return request(
       `/api/youtube/search?${params.toString()}`
     );
   },
 
-  async getSession() {
-    return this.get("/api/auth/session");
+  getSession() {
+    return request(
+      "/api/auth/session"
+    );
   },
 
   login() {
-    window.location.href = "/api/auth/google";
+    window.location.assign(
+      "/api/auth/google"
+    );
   },
 
   logout() {
-    window.location.href = "/api/auth/logout";
+    window.location.assign(
+      "/api/auth/logout"
+    );
   }
 };
 
