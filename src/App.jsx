@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState
+} from "react";
 import {
   Home,
   Search,
@@ -17,39 +22,89 @@ import {
 } from "lucide-react";
 
 import useAuth from "./hooks/useAuth";
-import useYouTube from "./hooks/useYouTube";
+import useLibrary from "./hooks/useLibrary";
+import useSearch from "./hooks/useSearch";
 import usePlayer from "./hooks/usePlayer";
+import usePwa from "./hooks/usePwa";
 import YouTubePlayer from "./components/YouTubePlayer";
 
 const NAV_ITEMS = [
-  { id: "home", label: "Home", icon: Home },
-  { id: "search", label: "Search", icon: Search },
-  { id: "library", label: "Library", icon: Library },
-  { id: "queue", label: "Queue", icon: ListMusic },
-  { id: "settings", label: "Settings", icon: Settings }
+  {
+    id: "home",
+    label: "Home",
+    icon: Home
+  },
+  {
+    id: "search",
+    label: "Search",
+    icon: Search
+  },
+  {
+    id: "library",
+    label: "Library",
+    icon: Library
+  },
+  {
+    id: "queue",
+    label: "Queue",
+    icon: ListMusic
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: Settings
+  }
 ];
 
-function App() {
+const DEFAULT_QUOTES = [
+  {
+    number: "23",
+    text: "Talent wins games. Teamwork and intelligence win championships."
+  },
+  {
+    number: "30",
+    text: "You miss 100% of the shots you don't take."
+  },
+  {
+    number: "24",
+    text: "Great things come from hard work and perseverance."
+  }
+];
+
+export default function App() {
   const {
     user,
     loading: authLoading,
+    error: authError,
     isAuthenticated,
     login,
-    logout
+    logout,
+    refresh: refreshAuth,
+    dismissError
   } = useAuth();
 
   const {
     playlists,
-    loadingPlaylists,
-    playlistError,
-    playlistItems,
-    loadingItems,
-    loadPlaylistItems,
-    searchResults,
-    searchLoading,
-    searchError,
-    search
-  } = useYouTube();
+    playlistTracks,
+    likedTracks,
+    loading: libraryLoading,
+    loadingPlaylist,
+    error: libraryError,
+    loadPlaylists,
+    loadPlaylist,
+    toggleLike,
+    isLiked,
+    clearError
+  } = useLibrary();
+
+  const {
+    query,
+    results: searchResults,
+    loading: searchLoading,
+    error: searchError,
+    setQuery,
+    clearSearch
+  } = useSearch();
 
   const {
     queue,
@@ -57,6 +112,9 @@ function App() {
     currentIndex,
     playing,
     play,
+    playIndex,
+    pause,
+    resume,
     togglePlay,
     next,
     previous,
@@ -66,162 +124,172 @@ function App() {
     replaceQueue
   } = usePlayer();
 
-  const [tab, setTab] = useState("home");
-  const [showPlayer, setShowPlayer] = useState(false);
+  const {
+    isInstalled
+  } = usePwa();
+
+  const [tab, setTab] =
+    useState("home");
+
+  const [showPlayer, setShowPlayer] =
+    useState(false);
+
   const [selectedPlaylist, setSelectedPlaylist] =
     useState(null);
 
-  const [query, setQuery] = useState("");
+  const [appError, setAppError] =
+    useState(null);
 
-  const [likedTracks, setLikedTracks] = useState(() => {
-    try {
-      return JSON.parse(
-        localStorage.getItem("clutch_liked") || "[]"
-      );
-    } catch {
-      return [];
-    }
-  });
+  const profileName =
+    user?.name || "Player";
 
-  /*
-   * Persist likes locally.
-   */
+  const profileAvatar =
+    user?.avatar || null;
+
+  const visibleError =
+    authError ||
+    libraryError ||
+    searchError ||
+    appError;
+
+  const dismissVisibleError =
+    useCallback(() => {
+      dismissError?.();
+      clearError?.();
+      setAppError(null);
+    }, [
+      dismissError,
+      clearError
+    ]);
+
   useEffect(() => {
-    localStorage.setItem(
-      "clutch_liked",
-      JSON.stringify(likedTracks)
-    );
-  }, [likedTracks]);
-
-  const isLiked = useCallback(
-    (videoId) =>
-      likedTracks.some(
-        (track) => track.videoId === videoId
-      ),
-    [likedTracks]
-  );
-
-  const toggleLike = useCallback((track) => {
-    if (!track?.videoId) {
-      return;
+    if (!isAuthenticated) {
+      setSelectedPlaylist(null);
+      setShowPlayer(false);
     }
+  }, [isAuthenticated]);
 
-    setLikedTracks((currentLikes) => {
-      const exists = currentLikes.some(
-        (item) => item.videoId === track.videoId
-      );
+  const handlePlay =
+    useCallback(
+      (track) => {
+        if (!track?.videoId) {
+          return;
+        }
 
-      if (exists) {
-        return currentLikes.filter(
-          (item) => item.videoId !== track.videoId
-        );
-      }
-
-      return [...currentLikes, track];
-    });
-  }, []);
-
-  /*
-   * Open a track in Clutch's player.
-   */
-  const handlePlay = useCallback(
-    (track) => {
-      play(track);
-      setShowPlayer(true);
-    },
-    [play]
-  );
-
-  /*
-   * Open an entire playlist.
-   */
-  const handlePlaylist = useCallback(
-    async (playlist) => {
-      setSelectedPlaylist(playlist);
-
-      let items = playlistItems[playlist.id];
-
-      if (!items) {
-        items = await loadPlaylistItems(
-          playlist.id
-        );
-      }
-
-      if (items.length) {
-        replaceQueue(items, 0);
+        play(track);
         setShowPlayer(true);
-      }
-    },
-    [
-      playlistItems,
-      loadPlaylistItems,
-      replaceQueue
-    ]
-  );
-
-  /*
-   * Search with a small debounce.
-   */
-  useEffect(() => {
-    if (tab !== "search") {
-      return;
-    }
-
-    const cleanQuery = query.trim();
-
-    if (!cleanQuery) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      search(cleanQuery);
-    }, 450);
-
-    return () => clearTimeout(timer);
-  }, [query, tab, search]);
-
-  /*
-   * Keyboard shortcuts for desktop testing.
-   */
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.target instanceof HTMLInputElement) {
-        return;
-      }
-
-      if (event.code === "Space") {
-        event.preventDefault();
-        togglePlay();
-      }
-
-      if (event.code === "ArrowRight") {
-        next();
-      }
-
-      if (event.code === "ArrowLeft") {
-        previous();
-      }
-    };
-
-    window.addEventListener(
-      "keydown",
-      handleKeyDown
+      },
+      [play]
     );
 
-    return () =>
-      window.removeEventListener(
-        "keydown",
-        handleKeyDown
-      );
-  }, [togglePlay, next, previous]);
+  const handlePlayIndex =
+    useCallback(
+      (index) => {
+        playIndex(index);
+        setShowPlayer(true);
+      },
+      [playIndex]
+    );
 
-  const currentPlaylistItems = useMemo(() => {
+  const handlePlaylist =
+    useCallback(
+      async (playlist) => {
+        if (!playlist?.id) {
+          return;
+        }
+
+        setSelectedPlaylist(playlist);
+        setTab("library");
+
+        let tracks =
+          playlistTracks[playlist.id];
+
+        if (!tracks) {
+          tracks =
+            await loadPlaylist(
+              playlist.id
+            );
+        }
+
+        if (tracks?.length) {
+          replaceQueue(tracks, 0);
+          setShowPlayer(true);
+        }
+      },
+      [
+        playlistTracks,
+        loadPlaylist,
+        replaceQueue
+      ]
+    );
+
+  const handlePlayAll =
+    useCallback(
+      (tracks) => {
+        if (!tracks?.length) {
+          return;
+        }
+
+        replaceQueue(tracks, 0);
+        setShowPlayer(true);
+      },
+      [replaceQueue]
+    );
+
+  const handleAddToQueue =
+    useCallback(
+      (track) => {
+        addToQueue(track);
+      },
+      [addToQueue]
+    );
+
+  const handleToggleLike =
+    useCallback(
+      (track) => {
+        toggleLike(track);
+      },
+      [toggleLike]
+    );
+
+  const handleSearchSubmit =
+    useCallback(
+      (event) => {
+        event.preventDefault();
+      },
+      []
+    );
+
+  const handleNavigate =
+    useCallback((nextTab) => {
+      setTab(nextTab);
+      setSelectedPlaylist(null);
+    }, []);
+
+  const handleLogout =
+    useCallback(() => {
+      logout();
+    }, [logout]);
+
+  const handlePlayerEnded =
+    useCallback(() => {
+      next();
+    }, [next]);
+
+  const activeTracks = useMemo(() => {
     if (!selectedPlaylist) {
       return [];
     }
 
-    return playlistItems[selectedPlaylist.id] || [];
-  }, [selectedPlaylist, playlistItems]);
+    return (
+      playlistTracks[
+        selectedPlaylist.id
+      ] || []
+    );
+  }, [
+    selectedPlaylist,
+    playlistTracks
+  ]);
 
   if (authLoading) {
     return <LoadingScreen />;
@@ -231,9 +299,8 @@ function App() {
     return (
       <LoginScreen
         onLogin={login}
-        error={new URLSearchParams(
-          window.location.search
-        ).get("auth_error")}
+        error={authError}
+        onDismissError={dismissVisibleError}
       />
     );
   }
@@ -241,46 +308,97 @@ function App() {
   return (
     <div className="app-shell">
       <Header
-        user={user}
-        onProfile={() => setTab("settings")}
+        name={profileName}
+        avatar={profileAvatar}
       />
+
+      {visibleError && (
+        <div className="error-card">
+          <span>{visibleError}</span>
+
+          <button
+            type="button"
+            onClick={dismissVisibleError}
+            className="icon-button"
+            aria-label="Dismiss error"
+          >
+            <X size={17} />
+          </button>
+        </div>
+      )}
 
       <main className="app-content">
         {tab === "home" && (
           <HomeScreen
-            user={user}
             playlists={playlists}
-            loading={loadingPlaylists}
-            error={playlistError}
+            loading={libraryLoading}
             onPlaylist={handlePlaylist}
             onPlay={handlePlay}
-            onOpenSearch={() => setTab("search")}
+            likedTracks={likedTracks}
           />
         )}
 
         {tab === "search" && (
           <SearchScreen
             query={query}
-            setQuery={setQuery}
             results={searchResults}
             loading={searchLoading}
-            error={searchError}
+            onChange={setQuery}
             onPlay={handlePlay}
-            onQueue={addToQueue}
+            onAddToQueue={
+              handleAddToQueue
+            }
+            onToggleLike={
+              handleToggleLike
+            }
             isLiked={isLiked}
-            onLike={toggleLike}
+            onClear={clearSearch}
           />
         )}
 
         {tab === "library" && (
-          <LibraryScreen
-            playlists={playlists}
-            loading={loadingPlaylists}
-            error={playlistError}
-            likedTracks={likedTracks}
-            onPlaylist={handlePlaylist}
-            onPlay={handlePlay}
-          />
+          selectedPlaylist ? (
+            <PlaylistDetail
+              playlist={selectedPlaylist}
+              tracks={activeTracks}
+              loading={
+                loadingPlaylist ===
+                selectedPlaylist.id
+              }
+              onBack={() =>
+                setSelectedPlaylist(null)
+              }
+              onPlay={handlePlay}
+              onPlayAll={handlePlayAll}
+              onAddToQueue={
+                handleAddToQueue
+              }
+              onToggleLike={
+                handleToggleLike
+              }
+              isLiked={isLiked}
+            />
+          ) : (
+            <LibraryScreen
+              playlists={playlists}
+              likedTracks={likedTracks}
+              loading={libraryLoading}
+              onPlaylist={
+                handlePlaylist
+              }
+              onPlay={handlePlay}
+              onPlayAll={
+                handlePlayAll
+              }
+              onToggleLike={
+                handleToggleLike
+              }
+              isLiked={isLiked}
+              onRefresh={
+                loadPlaylists
+              }
+            />
+          )
         )}
 
         {tab === "queue" && (
@@ -288,13 +406,12 @@ function App() {
             queue={queue}
             currentIndex={currentIndex}
             playing={playing}
-            onPlayIndex={(index) => {
-              if (index >= 0 && index < queue.length) {
-                play(queue[index]);
-                setShowPlayer(true);
-              }
-            }}
-            onRemove={removeFromQueue}
+            onPlayIndex={
+              handlePlayIndex
+            }
+            onRemove={
+              removeFromQueue
+            }
             onClear={clearQueue}
           />
         )}
@@ -302,22 +419,11 @@ function App() {
         {tab === "settings" && (
           <SettingsScreen
             user={user}
-            onLogout={logout}
-          />
-        )}
-
-        {selectedPlaylist && tab === "library" && (
-          <PlaylistDetail
-            playlist={selectedPlaylist}
-            items={currentPlaylistItems}
-            loading={
-              loadingItems[selectedPlaylist.id]
+            isInstalled={isInstalled}
+            onLogout={handleLogout}
+            onRefresh={
+              refreshAuth
             }
-            onClose={() =>
-              setSelectedPlaylist(null)
-            }
-            onPlay={handlePlay}
-            onQueue={addToQueue}
           />
         )}
       </main>
@@ -326,99 +432,64 @@ function App() {
         <MiniPlayer
           track={current}
           playing={playing}
-          onPlayPause={togglePlay}
-          onPrevious={previous}
+          onTogglePlay={
+            togglePlay
+          }
+          onPrevious={
+            previous
+          }
           onNext={next}
-          onOpen={() => setShowPlayer(true)}
+          onOpen={() =>
+            setShowPlayer(true)
+          }
         />
       )}
 
       <BottomNav
-        active={tab}
-        onChange={setTab}
-        queueCount={queue.length}
+        activeTab={tab}
+        onNavigate={
+          handleNavigate
+        }
       />
 
       {showPlayer && current && (
         <NowPlaying
           track={current}
           playing={playing}
-          liked={isLiked(current.videoId)}
-          onLike={() => toggleLike(current)}
-          onPlayPause={togglePlay}
-          onPrevious={previous}
+          onClose={() =>
+            setShowPlayer(false)
+          }
+          onTogglePlay={
+            togglePlay
+          }
+          onPrevious={
+            previous
+          }
           onNext={next}
-          onClose={() => setShowPlayer(false)}
+          onToggleLike={
+            handleToggleLike
+          }
+          liked={isLiked(
+            current.videoId
+          )}
         />
       )}
 
       <YouTubePlayer
         track={current}
         playing={playing}
-        onEnded={next}
+        onEnded={
+          handlePlayerEnded
+        }
       />
     </div>
   );
 }
 
-/* -------------------------------------------------- */
-/* Login */
-/* -------------------------------------------------- */
-
-function LoginScreen({ onLogin, error }) {
-  return (
-    <div className="login-screen">
-      <div className="login-brand">
-        <div className="brand-mark">C</div>
-
-        <p className="eyebrow">
-          CLUTCH / MUSIC CONSOLE
-        </p>
-
-        <h1>
-          Your music.
-          <br />
-          <span>Your court.</span>
-        </h1>
-
-        <p className="login-copy">
-          A custom basketball-inspired music
-          experience built for your phone.
-        </p>
-
-        {error && (
-          <div className="error-card">
-            Authentication failed. Please try
-            signing in again.
-          </div>
-        )}
-
-        <button
-          className="primary-button login-button"
-          onClick={onLogin}
-        >
-          <LogIn size={19} />
-          Continue with Google
-        </button>
-
-        <p className="login-note">
-          Clutch uses your Google account to access
-          supported YouTube data.
-        </p>
-      </div>
-
-      <div className="login-number">
-        23
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------- */
-/* Header */
-/* -------------------------------------------------- */
-
-function Header({ user, onProfile }) {
+function Header({
+  name,
+  avatar
+}) {
   return (
     <header className="top-header">
       <div>
@@ -430,71 +501,62 @@ function Header({ user, onProfile }) {
           <span className="brand-dot" />
         </div>
 
-        <p className="header-subtitle">
-          MUSIC / GAME TIME
-        </p>
+        <div className="header-subtitle">
+          MUSIC CONSOLE
+        </div>
       </div>
 
       <button
+        type="button"
         className="avatar-button"
-        onClick={onProfile}
-        aria-label="Open settings"
+        aria-label="Profile"
       >
-        {user?.avatar ? (
+        {avatar ? (
           <img
-            src={user.avatar}
-            alt=""
+            src={avatar}
+            alt={name}
           />
         ) : (
-          "C"
+          name
+            ?.charAt(0)
+            ?.toUpperCase() || "P"
         )}
       </button>
     </header>
   );
 }
 
-/* -------------------------------------------------- */
-/* Home */
-/* -------------------------------------------------- */
-
 function HomeScreen({
-  user,
   playlists,
   loading,
-  error,
   onPlaylist,
   onPlay,
-  onOpenSearch
+  likedTracks
 }) {
-  const featured = playlists.slice(0, 4);
+  const featured =
+    playlists.slice(0, 4);
+
+  const recentTracks =
+    likedTracks.slice(-5).reverse();
 
   return (
-    <section className="screen">
-      <div className="hero">
+    <div className="screen">
+      <section className="hero">
         <div className="hero-copy">
-          <p className="eyebrow">
-            WELCOME BACK
-          </p>
+          <span className="eyebrow">
+            GAME DAY
+          </span>
 
           <h1>
-            {user?.name
-              ? user.name.split(" ")[0]
-              : "PLAYER"}
+            YOUR
+            <br />
+            <strong>ROTATION.</strong>
           </h1>
 
           <p>
-            What are we running
-            <br />
-            tonight?
+            Your music. Your court.
+            Your rules.
           </p>
-
-          <button
-            className="hero-button"
-            onClick={onOpenSearch}
-          >
-            Find something
-            <ChevronRight size={17} />
-          </button>
         </div>
 
         <div className="hero-number">
@@ -502,273 +564,473 @@ function HomeScreen({
         </div>
 
         <div className="basketball-lines" />
-      </div>
+
+        <button
+          type="button"
+          className="hero-button"
+          onClick={() =>
+            onPlay?.(
+              recentTracks[0]
+            )
+          }
+          disabled={!recentTracks.length}
+        >
+          <Play size={18} fill="currentColor" />
+          PLAY YOUR ROTATION
+        </button>
+      </section>
 
       <SectionTitle
         title="YOUR PLAYLISTS"
         action="VIEW ALL"
       />
 
-      {loading && (
-        <div className="loading-card">
-          Loading your playlists...
-        </div>
-      )}
-
-      {error && (
-        <div className="error-card">
-          {error}
-        </div>
-      )}
-
-      {!loading && !error && (
+      {loading ? (
+        <LoadingCard />
+      ) : (
         <div className="playlist-grid">
-          {featured.map((playlist) => (
-            <PlaylistCard
-              key={playlist.id}
-              playlist={playlist}
-              onClick={() =>
-                onPlaylist(playlist)
-              }
-            />
-          ))}
+          {featured.map(
+            (playlist) => (
+              <PlaylistCard
+                key={playlist.id}
+                playlist={playlist}
+                onClick={() =>
+                  onPlaylist(
+                    playlist
+                  )
+                }
+              />
+            )
+          )}
         </div>
       )}
 
-      <div className="quote-card">
-        <div className="quote-number">
-          30
-        </div>
+      <SectionTitle
+        title="RECENTLY LIKED"
+      />
 
-        <div>
-          <p className="quote">
-            "The key to success
-            <br />
-            is failure."
+      {recentTracks.length ? (
+        <div className="track-list">
+          {recentTracks.map(
+            (track, index) => (
+              <TrackRow
+                key={
+                  track.videoId
+                }
+                track={track}
+                index={index}
+                onPlay={() =>
+                  onPlay(track)
+                }
+              />
+            )
+          )}
+        </div>
+      ) : (
+        <div className="search-empty">
+          <div className="search-ball">
+            23
+          </div>
+          <p>
+            Like tracks to build
+            your rotation.
           </p>
-
-          <span>
-            — MICHAEL JORDAN
-          </span>
         </div>
-      </div>
-    </section>
+      )}
+
+      <QuoteCard />
+    </div>
   );
 }
 
-/* -------------------------------------------------- */
-/* Search */
-/* -------------------------------------------------- */
-
 function SearchScreen({
   query,
-  setQuery,
   results,
   loading,
-  error,
+  onChange,
   onPlay,
-  onQueue,
+  onAddToQueue,
+  onToggleLike,
   isLiked,
-  onLike
+  onClear
 }) {
   return (
-    <section className="screen">
-      <SectionTitle title="SEARCH" />
+    <div className="screen">
+      <div className="eyebrow">
+        SCOUTING
+      </div>
 
-      <div className="search-box">
-        <Search size={20} />
+      <h2 className="section-heading">
+        SEARCH
+      </h2>
+
+      <form
+        className="search-box"
+        onSubmit={(event) =>
+          event.preventDefault()
+        }
+      >
+        <Search size={19} />
 
         <input
           value={query}
           onChange={(event) =>
-            setQuery(event.target.value)
+            onChange(
+              event.target.value
+            )
           }
           placeholder="Search music..."
           autoComplete="off"
-          spellCheck="false"
         />
 
         {query && (
           <button
-            onClick={() => setQuery("")}
+            type="button"
+            onClick={onClear}
+            className="icon-button"
             aria-label="Clear search"
           >
             <X size={17} />
           </button>
         )}
-      </div>
+      </form>
+
+      {loading && (
+        <div className="loading-card">
+          SEARCHING THE COURT...
+        </div>
+      )}
+
+      {!loading &&
+        query &&
+        !results.length && (
+          <div className="search-empty">
+            <div className="search-ball">
+              ?
+            </div>
+            <p>
+              No tracks found.
+            </p>
+          </div>
+        )}
 
       {!query && (
         <div className="search-empty">
           <div className="search-ball">
-            ◎
+            30
           </div>
-
-          <h2>SEARCH THE COURT</h2>
-
           <p>
-            Find songs, artists and music
-            across YouTube.
+            Search for a track,
+            artist, or album.
           </p>
         </div>
       )}
 
-      {loading && (
-        <div className="loading-card">
-          Searching...
-        </div>
-      )}
-
-      {error && (
-        <div className="error-card">
-          {error}
-        </div>
-      )}
-
-      {!loading && query && (
+      {results.length > 0 && (
         <div className="track-list">
-          {results.map((track) => (
-            <TrackRow
-              key={track.videoId}
-              track={track}
-              onPlay={() => onPlay(track)}
-              onQueue={() => onQueue(track)}
-              liked={isLiked(track.videoId)}
-              onLike={() => onLike(track)}
-            />
-          ))}
-
-          {!results.length && (
-            <div className="loading-card">
-              No results found.
-            </div>
+          {results.map(
+            (track, index) => (
+              <TrackRow
+                key={
+                  track.videoId
+                }
+                track={track}
+                index={index}
+                onPlay={() =>
+                  onPlay(track)
+                }
+                onAddToQueue={() =>
+                  onAddToQueue(track)
+                }
+                onToggleLike={() =>
+                  onToggleLike(track)
+                }
+                liked={isLiked(
+                  track.videoId
+                )}
+                showActions
+              />
+            )
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }
-
-/* -------------------------------------------------- */
-/* Library */
-/* -------------------------------------------------- */
 
 function LibraryScreen({
   playlists,
-  loading,
-  error,
   likedTracks,
+  loading,
   onPlaylist,
-  onPlay
+  onPlay,
+  onPlayAll,
+  onToggleLike,
+  isLiked,
+  onRefresh
 }) {
   return (
-    <section className="screen">
-      <SectionTitle title="LIBRARY" />
-
+    <div className="screen">
       <div className="library-profile">
-        <div className="library-icon">
-          ♡
+        <div>
+          <span className="eyebrow">
+            THE LOCKER ROOM
+          </span>
+
+          <h2 className="section-heading">
+            LIBRARY
+          </h2>
         </div>
 
-        <div>
-          <strong>Liked Music</strong>
-          <span>
-            {likedTracks.length} tracks
-          </span>
-        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={onRefresh}
+        >
+          REFRESH
+        </button>
       </div>
 
-      {loading && (
-        <div className="loading-card">
-          Loading library...
+      <SectionTitle
+        title={`PLAYLISTS · ${playlists.length}`}
+      />
+
+      {loading ? (
+        <LoadingCard />
+      ) : (
+        <div className="library-list">
+          {playlists.map(
+            (playlist) => (
+              <button
+                key={playlist.id}
+                type="button"
+                className="library-row"
+                onClick={() =>
+                  onPlaylist(
+                    playlist
+                  )
+                }
+              >
+                {playlist.thumbnail ? (
+                  <img
+                    src={
+                      playlist.thumbnail
+                    }
+                    alt=""
+                  />
+                ) : (
+                  <div className="library-placeholder">
+                    23
+                  </div>
+                )}
+
+                <span>
+                  <strong>
+                    {playlist.title}
+                  </strong>
+                  <small>
+                    {playlist.itemCount}{" "}
+                    tracks
+                  </small>
+                </span>
+
+                <ChevronRight
+                  size={18}
+                />
+              </button>
+            )
+          )}
         </div>
       )}
 
-      {error && (
-        <div className="error-card">
-          {error}
-        </div>
-      )}
+      <SectionTitle
+        title={`LIKED · ${likedTracks.length}`}
+      />
 
-      <div className="library-list">
-        {playlists.map((playlist) => (
+      {likedTracks.length ? (
+        <div className="track-list">
+          {likedTracks.map(
+            (track, index) => (
+              <TrackRow
+                key={
+                  track.videoId
+                }
+                track={track}
+                index={index}
+                onPlay={() =>
+                  onPlay(track)
+                }
+                onToggleLike={() =>
+                  onToggleLike(track)
+                }
+                liked={isLiked(
+                  track.videoId
+                )}
+              />
+            )
+          )}
+
           <button
-            className="library-row"
-            key={playlist.id}
+            type="button"
+            className="hero-button"
             onClick={() =>
-              onPlaylist(playlist)
+              onPlayAll(
+                likedTracks
+              )
             }
           >
-            <img
-              src={playlist.thumbnail}
-              alt=""
+            <Play
+              size={18}
+              fill="currentColor"
             />
-
-            <div>
-              <strong>
-                {playlist.title}
-              </strong>
-
-              <span>
-                {playlist.itemCount} tracks
-              </span>
-            </div>
-
-            <ChevronRight size={18} />
+            PLAY LIKED
           </button>
-        ))}
-      </div>
-
-      {likedTracks.length > 0 && (
-        <>
-          <SectionTitle
-            title="LIKED MUSIC"
-            action={`${likedTracks.length}`}
-          />
-
-          <div className="track-list">
-            {likedTracks
-              .slice(0, 10)
-              .map((track) => (
-                <TrackRow
-                  key={track.videoId}
-                  track={track}
-                  onPlay={() =>
-                    onPlay(track)
-                  }
-                />
-              ))}
+        </div>
+      ) : (
+        <div className="search-empty">
+          <div className="search-ball">
+            ♥
           </div>
-        </>
+          <p>
+            Your liked tracks
+            appear here.
+          </p>
+        </div>
       )}
-    </section>
+    </div>
   );
 }
 
-/* -------------------------------------------------- */
-/* Queue */
-/* -------------------------------------------------- */
+function PlaylistDetail({
+  playlist,
+  tracks,
+  loading,
+  onBack,
+  onPlay,
+  onPlayAll,
+  onAddToQueue,
+  onToggleLike,
+  isLiked
+}) {
+  return (
+    <div className="screen">
+      <button
+        type="button"
+        className="text-button"
+        onClick={onBack}
+      >
+        ← LIBRARY
+      </button>
+
+      <div className="detail-overlay">
+        <div className="detail-sheet">
+          {playlist.thumbnail ? (
+            <img
+              className="detail-cover"
+              src={playlist.thumbnail}
+              alt=""
+            />
+          ) : (
+            <div className="detail-cover">
+              23
+            </div>
+          )}
+
+          <div className="eyebrow">
+            PLAYLIST
+          </div>
+
+          <h2 className="section-heading">
+            {playlist.title}
+          </h2>
+
+          <p>
+            {playlist.description ||
+              `${playlist.itemCount} tracks`}
+          </p>
+
+          <button
+            type="button"
+            className="hero-button"
+            onClick={() =>
+              onPlayAll(tracks)
+            }
+            disabled={!tracks.length}
+          >
+            <Play
+              size={18}
+              fill="currentColor"
+            />
+            PLAY ALL
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <LoadingCard />
+      ) : tracks.length ? (
+        <div className="track-list">
+          {tracks.map(
+            (track, index) => (
+              <TrackRow
+                key={
+                  track.videoId
+                }
+                track={track}
+                index={index}
+                onPlay={() =>
+                  onPlay(track)
+                }
+                onAddToQueue={() =>
+                  onAddToQueue(track)
+                }
+                onToggleLike={() =>
+                  onToggleLike(track)
+                }
+                liked={isLiked(
+                  track.videoId
+                )}
+                showActions
+              />
+            )
+          )}
+        </div>
+      ) : (
+        <div className="search-empty">
+          <p>
+            This playlist has no
+            playable tracks.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function QueueScreen({
   queue,
   currentIndex,
+  playing,
   onPlayIndex,
   onRemove,
   onClear
 }) {
   return (
-    <section className="screen">
-      <div className="section-heading">
+    <div className="screen">
+      <div className="library-profile">
         <div>
-          <p className="eyebrow">
-            UP NEXT
-          </p>
+          <span className="eyebrow">
+            GAME PLAN
+          </span>
 
-          <h2>QUEUE</h2>
+          <h2 className="section-heading">
+            QUEUE
+          </h2>
         </div>
 
         {queue.length > 0 && (
           <button
+            type="button"
             className="text-button"
             onClick={onClear}
           >
@@ -777,109 +1039,122 @@ function QueueScreen({
         )}
       </div>
 
-      {!queue.length && (
+      {!queue.length ? (
         <div className="search-empty">
-          <ListMusic size={42} />
-
-          <h2>QUEUE IS EMPTY</h2>
-
+          <div className="search-ball">
+            23
+          </div>
           <p>
-            Add music from Search or your
-            Library.
+            Your queue is empty.
           </p>
         </div>
+      ) : (
+        <div className="track-list">
+          {queue.map(
+            (track, index) => (
+              <div
+                key={`${track.videoId}-${index}`}
+                className={`queue-row ${
+                  index === currentIndex
+                    ? "active"
+                    : ""
+                }`}
+              >
+                <button
+                  type="button"
+                  className="queue-play"
+                  onClick={() =>
+                    onPlayIndex(index)
+                  }
+                >
+                  {index ===
+                    currentIndex &&
+                  playing ? (
+                    <Pause
+                      size={16}
+                      fill="currentColor"
+                    />
+                  ) : (
+                    <Play
+                      size={16}
+                      fill="currentColor"
+                    />
+                  )}
+                </button>
+
+                <div className="track-info">
+                  <strong>
+                    {track.title}
+                  </strong>
+                  <span>
+                    {track.channel}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() =>
+                    onRemove(index)
+                  }
+                  aria-label="Remove from queue"
+                >
+                  <X size={17} />
+                </button>
+              </div>
+            )
+          )}
+        </div>
       )}
-
-      <div className="track-list">
-        {queue.map((track, index) => (
-          <div
-            className={`queue-row ${
-              index === currentIndex
-                ? "active"
-                : ""
-            }`}
-            key={`${track.videoId}-${index}`}
-          >
-            <button
-              className="queue-play"
-              onClick={() =>
-                onPlayIndex(index)
-              }
-            >
-              {index === currentIndex ? (
-                <Pause size={16} />
-              ) : (
-                <Play size={16} />
-              )}
-            </button>
-
-            <img
-              src={track.thumbnail}
-              alt=""
-            />
-
-            <div className="track-info">
-              <strong>
-                {track.title}
-              </strong>
-
-              <span>
-                {track.channel}
-              </span>
-            </div>
-
-            <button
-              className="icon-button"
-              onClick={() =>
-                onRemove(index)
-              }
-              aria-label="Remove from queue"
-            >
-              <X size={17} />
-            </button>
-          </div>
-        ))}
-      </div>
-    </section>
+    </div>
   );
 }
 
-/* -------------------------------------------------- */
-/* Settings */
-/* -------------------------------------------------- */
-
-function SettingsScreen({ user, onLogout }) {
+function SettingsScreen({
+  user,
+  isInstalled,
+  onLogout,
+  onRefresh
+}) {
   return (
-    <section className="screen">
-      <SectionTitle title="SETTINGS" />
+    <div className="screen">
+      <span className="eyebrow">
+        CONTROL CENTER
+      </span>
+
+      <h2 className="section-heading">
+        SETTINGS
+      </h2>
 
       <div className="profile-card">
-        {user?.avatar && (
+        {user?.avatar ? (
           <img
             src={user.avatar}
             alt=""
           />
+        ) : (
+          <div className="library-placeholder">
+            23
+          </div>
         )}
 
         <div>
           <strong>
-            {user?.name || "YouTube Player"}
+            {user?.name ||
+              "Clutch Player"}
           </strong>
 
           <span>
-            Connected to YouTube
+            YouTube account
           </span>
         </div>
       </div>
 
       <div className="settings-group">
         <div className="setting-row">
-          <div>
-            <strong>ACCOUNT</strong>
-            <span>
-              Google / YouTube
-            </span>
-          </div>
+          <span>
+            Account status
+          </span>
 
           <span className="status-dot">
             CONNECTED
@@ -887,199 +1162,185 @@ function SettingsScreen({ user, onLogout }) {
         </div>
 
         <div className="setting-row">
-          <div>
-            <strong>PLAYER</strong>
-            <span>
-              YouTube IFrame Player
-            </span>
-          </div>
-        </div>
+          <span>
+            PWA status
+          </span>
 
-        <div className="setting-row">
-          <div>
-            <strong>VERSION</strong>
-            <span>
-              Clutch 1.0.0
-            </span>
-          </div>
+          <span className="status-dot">
+            {isInstalled
+              ? "INSTALLED"
+              : "BROWSER"}
+          </span>
         </div>
       </div>
 
       <button
+        type="button"
+        className="primary-button"
+        onClick={onRefresh}
+      >
+        REFRESH ACCOUNT
+      </button>
+
+      <button
+        type="button"
         className="logout-button"
         onClick={onLogout}
       >
-        <LogOut size={18} />
-        Sign out
+        <LogOut size={17} />
+        SIGN OUT
       </button>
 
       <div className="settings-footer">
-        <span>CLUTCH</span>
-        <span>23 / 30</span>
-      </div>
-    </section>
-  );
-}
-
-/* -------------------------------------------------- */
-/* Playlist Detail */
-/* -------------------------------------------------- */
-
-function PlaylistDetail({
-  playlist,
-  items,
-  loading,
-  onClose,
-  onPlay,
-  onQueue
-}) {
-  return (
-    <div className="detail-overlay">
-      <div className="detail-sheet">
-        <button
-          className="detail-close"
-          onClick={onClose}
-          aria-label="Close playlist"
-        >
-          <X size={20} />
-        </button>
-
-        <img
-          className="detail-cover"
-          src={playlist.thumbnail}
-          alt=""
-        />
-
-        <p className="eyebrow">
-          PLAYLIST
-        </p>
-
-        <h2>{playlist.title}</h2>
-
-        <p className="detail-description">
-          {playlist.description ||
-            `${playlist.itemCount} tracks`}
-        </p>
-
-        {loading && (
-          <div className="loading-card">
-            Loading tracks...
-          </div>
-        )}
-
-        {!loading && (
-          <div className="track-list">
-            {items.map((track) => (
-              <TrackRow
-                key={track.videoId}
-                track={track}
-                onPlay={() =>
-                  onPlay(track)
-                }
-                onQueue={() =>
-                  onQueue(track)
-                }
-              />
-            ))}
-          </div>
-        )}
+        CLUTCH · 23
       </div>
     </div>
   );
 }
 
-/* -------------------------------------------------- */
-/* Components */
-/* -------------------------------------------------- */
-
-function PlaylistCard({ playlist, onClick }) {
-  return (
-    <button
-      className="playlist-card"
-      onClick={onClick}
-    >
-      <img
-        src={playlist.thumbnail}
-        alt=""
-      />
-
-      <div className="playlist-overlay">
-        <span>
-          {playlist.itemCount} TRACKS
-        </span>
-
-        <strong>
-          {playlist.title}
-        </strong>
-      </div>
-    </button>
-  );
-}
-
 function TrackRow({
   track,
+  index,
   onPlay,
-  onQueue,
-  liked,
-  onLike
+  onAddToQueue,
+  onToggleLike,
+  liked = false,
+  showActions = false
 }) {
   return (
     <div className="track-row">
       <button
+        type="button"
         className="track-cover-button"
         onClick={onPlay}
       >
-        <img
-          src={track.thumbnail}
-          alt=""
-        />
+        {track.thumbnail ? (
+          <img
+            src={track.thumbnail}
+            alt=""
+          />
+        ) : (
+          <div className="track-cover-fallback">
+            {String(
+              index + 1
+            ).padStart(2, "0")}
+          </div>
+        )}
 
         <span className="track-play">
-          <Play size={15} fill="currentColor" />
+          <Play
+            size={14}
+            fill="currentColor"
+          />
         </span>
       </button>
 
       <button
+        type="button"
         className="track-main"
         onClick={onPlay}
       >
-        <strong>{track.title}</strong>
+        <strong>
+          {track.title}
+        </strong>
 
         <span>
           {track.channel}
         </span>
       </button>
 
-      {onLike && (
-        <button
-          className={`icon-button ${
-            liked ? "liked" : ""
-          }`}
-          onClick={onLike}
-          aria-label={
-            liked
-              ? "Unlike"
-              : "Like"
-          }
-        >
-          <Heart
-            size={18}
-            fill={
-              liked
-                ? "currentColor"
-                : "none"
+      {showActions && (
+        <>
+          <button
+            type="button"
+            className={`icon-button ${
+              liked ? "liked" : ""
+            }`}
+            onClick={() =>
+              onToggleLike?.()
             }
-          />
-        </button>
+            aria-label={
+              liked
+                ? "Unlike"
+                : "Like"
+            }
+          >
+            <Heart
+              size={17}
+              fill={
+                liked
+                  ? "currentColor"
+                  : "none"
+              }
+            />
+          </button>
+
+          <button
+            type="button"
+            className="icon-button"
+            onClick={() =>
+              onAddToQueue?.()
+            }
+            aria-label="Add to queue"
+          >
+            <ListMusic size={17} />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PlaylistCard({
+  playlist,
+  onClick
+}) {
+  return (
+    <button
+      type="button"
+      className="playlist-card"
+      onClick={onClick}
+    >
+      {playlist.thumbnail ? (
+        <img
+          src={playlist.thumbnail}
+          alt=""
+        />
+      ) : (
+        <div className="playlist-placeholder">
+          23
+        </div>
       )}
 
-      {onQueue && (
+      <div className="playlist-overlay">
+        <strong>
+          {playlist.title}
+        </strong>
+
+        <span>
+          {playlist.itemCount} TRACKS
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function SectionTitle({
+  title,
+  action
+}) {
+  return (
+    <div className="library-profile">
+      <h3 className="section-heading">
+        {title}
+      </h3>
+
+      {action && (
         <button
-          className="icon-button"
-          onClick={onQueue}
-          aria-label="Add to queue"
+          type="button"
+          className="text-button"
         >
-          <ListMusic size={18} />
+          {action}
         </button>
       )}
     </div>
@@ -1089,7 +1350,7 @@ function TrackRow({
 function MiniPlayer({
   track,
   playing,
-  onPlayPause,
+  onTogglePlay,
   onPrevious,
   onNext,
   onOpen
@@ -1099,17 +1360,29 @@ function MiniPlayer({
       className="mini-player"
       onClick={onOpen}
     >
-      <img
-        src={track.thumbnail}
-        alt=""
-      />
+      {track.thumbnail ? (
+        <img
+          src={track.thumbnail}
+          alt=""
+        />
+      ) : (
+        <div className="track-cover-fallback">
+          23
+        </div>
+      )}
 
-      <div className="mini-info">
-        <strong>{track.title}</strong>
-        <span>{track.channel}</span>
+      <div className="track-info">
+        <strong>
+          {track.title}
+        </strong>
+
+        <span>
+          {track.channel}
+        </span>
       </div>
 
       <button
+        type="button"
         className="mini-control"
         onClick={(event) => {
           event.stopPropagation();
@@ -1121,23 +1394,33 @@ function MiniPlayer({
       </button>
 
       <button
-        className="mini-control play"
+        type="button"
+        className="mini-control"
         onClick={(event) => {
           event.stopPropagation();
-          onPlayPause();
+          onTogglePlay();
         }}
         aria-label={
-          playing ? "Pause" : "Play"
+          playing
+            ? "Pause"
+            : "Play"
         }
       >
         {playing ? (
-          <Pause size={17} />
+          <Pause
+            size={17}
+            fill="currentColor"
+          />
         ) : (
-          <Play size={17} fill="currentColor" />
+          <Play
+            size={17}
+            fill="currentColor"
+          />
         )}
       </button>
 
       <button
+        type="button"
         className="mini-control"
         onClick={(event) => {
           event.stopPropagation();
@@ -1154,56 +1437,76 @@ function MiniPlayer({
 function NowPlaying({
   track,
   playing,
-  liked,
-  onLike,
-  onPlayPause,
+  onClose,
+  onTogglePlay,
   onPrevious,
   onNext,
-  onClose
+  onToggleLike,
+  liked
 }) {
   return (
     <div className="now-playing">
       <div className="now-playing-top">
         <button
+          type="button"
           className="icon-button"
           onClick={onClose}
           aria-label="Close player"
         >
-          <X size={22} />
+          <X size={21} />
         </button>
 
-        <span>
+        <span className="eyebrow">
           NOW PLAYING
         </span>
 
-        <div />
+        <span />
       </div>
 
       <div className="now-playing-art">
-        <img
-          src={track.thumbnail}
-          alt=""
-        />
-
-        <div className="art-ring" />
+        <div className="art-ring">
+          {track.thumbnail ? (
+            <img
+              src={track.thumbnail}
+              alt=""
+            />
+          ) : (
+            <div className="track-cover-fallback">
+              23
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="now-playing-info">
-        <p className="eyebrow">
-          ON THE COURT
+        <span className="eyebrow">
+          {track.channel}
+        </span>
+
+        <h2>
+          {track.title}
+        </h2>
+
+        <p>
+          {track.description ||
+            "Clutch rotation"}
         </p>
-
-        <h1>{track.title}</h1>
-
-        <p>{track.channel}</p>
       </div>
 
       <div className="now-playing-actions">
         <button
+          type="button"
           className={`icon-button ${
             liked ? "liked" : ""
           }`}
-          onClick={onLike}
+          onClick={() =>
+            onToggleLike(track)
+          }
+          aria-label={
+            liked
+              ? "Unlike"
+              : "Like"
+          }
         >
           <Heart
             size={21}
@@ -1217,13 +1520,24 @@ function NowPlaying({
       </div>
 
       <div className="player-controls">
-        <button onClick={onPrevious}>
-          <SkipBack size={26} />
+        <button
+          type="button"
+          className="mini-control"
+          onClick={onPrevious}
+          aria-label="Previous"
+        >
+          <SkipBack size={23} />
         </button>
 
         <button
+          type="button"
           className="main-play-button"
-          onClick={onPlayPause}
+          onClick={onTogglePlay}
+          aria-label={
+            playing
+              ? "Pause"
+              : "Play"
+          }
         >
           {playing ? (
             <Pause
@@ -1238,8 +1552,13 @@ function NowPlaying({
           )}
         </button>
 
-        <button onClick={onNext}>
-          <SkipForward size={26} />
+        <button
+          type="button"
+          className="mini-control"
+          onClick={onNext}
+          aria-label="Next"
+        >
+          <SkipForward size={23} />
         </button>
       </div>
 
@@ -1251,56 +1570,139 @@ function NowPlaying({
 }
 
 function BottomNav({
-  active,
-  onChange,
-  queueCount
+  activeTab,
+  onNavigate
 }) {
   return (
     <nav className="bottom-nav">
-      {NAV_ITEMS.map((item) => {
-        const Icon = item.icon;
-
-        return (
+      {NAV_ITEMS.map(
+        ({
+          id,
+          label,
+          icon: Icon
+        }) => (
           <button
-            key={item.id}
+            key={id}
+            type="button"
             className={
-              active === item.id
+              activeTab === id
                 ? "active"
                 : ""
             }
             onClick={() =>
-              onChange(item.id)
+              onNavigate(id)
             }
           >
             <span className="nav-icon-wrap">
               <Icon size={19} />
-
-              {item.id === "queue" &&
-                queueCount > 0 && (
-                  <b>
-                    {queueCount}
-                  </b>
-                )}
             </span>
 
-            <span>{item.label}</span>
+            <span>{label}</span>
           </button>
-        );
-      })}
+        )
+      )}
     </nav>
   );
 }
 
-function SectionTitle({ title, action }) {
-  return (
-    <div className="section-heading">
-      <h2>{title}</h2>
+function QuoteCard() {
+  const quote =
+    DEFAULT_QUOTES[
+      Math.floor(
+        Math.random() *
+          DEFAULT_QUOTES.length
+      )
+    ];
 
-      {action && (
-        <span className="section-action">
-          {action}
+  return (
+    <div className="quote-card">
+      <span className="quote-number">
+        {quote.number}
+      </span>
+
+      <p className="quote">
+        “{quote.text}”
+      </p>
+    </div>
+  );
+}
+
+function LoadingCard() {
+  return (
+    <div className="loading-card">
+      LOADING...
+    </div>
+  );
+}
+
+function LoginScreen({
+  onLogin,
+  error,
+  onDismissError
+}) {
+  return (
+    <div className="login-screen">
+      <div className="login-brand">
+        <div className="brand-mark">
+          23
+        </div>
+
+        <span>
+          CLUTCH
         </span>
+      </div>
+
+      <div>
+        <h1>
+          YOUR MUSIC.
+          <br />
+          <strong>YOUR GAME.</strong>
+        </h1>
+
+        <p className="login-copy">
+          Connect your Google /
+          YouTube account and
+          turn your library into
+          your own music console.
+        </p>
+      </div>
+
+      {error && (
+        <div className="error-card">
+          <span>{error}</span>
+
+          <button
+            type="button"
+            className="icon-button"
+            onClick={
+              onDismissError
+            }
+            aria-label="Dismiss error"
+          >
+            <X size={17} />
+          </button>
+        </div>
       )}
+
+      <button
+        type="button"
+        className="primary-button login-button"
+        onClick={onLogin}
+      >
+        <LogIn size={18} />
+        CONNECT GOOGLE
+      </button>
+
+      <p className="login-note">
+        Clutch uses supported
+        Google and YouTube APIs.
+        Your Google password is
+        never handled by Clutch.
+      </p>
+
+      <div className="login-number">
+        23
+      </div>
     </div>
   );
 }
@@ -1309,12 +1711,12 @@ function LoadingScreen() {
   return (
     <div className="loading-screen">
       <div className="loading-logo">
-        C
+        23
       </div>
 
-      <p>LOADING CLUTCH...</p>
+      <span>
+        CLUTCH
+      </span>
     </div>
   );
 }
-
-export default App;
