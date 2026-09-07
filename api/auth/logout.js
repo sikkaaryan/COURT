@@ -1,12 +1,14 @@
 export default function handler(req, res) {
-  if (req.method !== "POST" && req.method !== "GET") {
+  if (
+    req.method !== "POST" &&
+    req.method !== "GET"
+  ) {
     return res.status(405).json({
       error: "Method not allowed."
     });
   }
 
-  res.setHeader(
-    "Set-Cookie",
+  res.setHeader("Set-Cookie", [
     [
       "clutch_session=",
       "HttpOnly",
@@ -14,11 +16,8 @@ export default function handler(req, res) {
       "SameSite=Lax",
       "Path=/",
       "Max-Age=0"
-    ].join("; ")
-  );
+    ].join("; "),
 
-  res.setHeader(
-    "Set-Cookie",
     [
       "clutch_oauth_state=",
       "HttpOnly",
@@ -27,7 +26,7 @@ export default function handler(req, res) {
       "Path=/",
       "Max-Age=0"
     ].join("; ")
-  );
+  ]);
 
   if (req.method === "GET") {
     return res.redirect("/");
