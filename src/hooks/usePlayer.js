@@ -1,50 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-
-const STORAGE_KEY = "clutch_player";
-
-function loadSavedPlayer() {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-
-    if (!saved) {
-      return {
-        queue: [],
-        currentIndex: -1,
-        playing: false
-      };
-    }
-
-    const parsed = JSON.parse(saved);
-
-    return {
-      queue: Array.isArray(parsed.queue)
-        ? parsed.queue
-        : [],
-      currentIndex:
-        Number.isInteger(parsed.currentIndex)
-          ? parsed.currentIndex
-          : -1,
-      playing: false
-    };
-  } catch {
-    return {
-      queue: [],
-      currentIndex: -1,
-      playing: false
-    };
-  }
-}
+import { useCallback, useEffect, useState } from "react";
+import {
+  cleanTrack,
+  cleanTracks,
+  containsTrack,
+  getSafeIndex
+} from "../lib/player";
+import {
+  getSavedPlayer,
+  savePlayer
+} from "../lib/storage";
 
 export default function usePlayer() {
-  const initial = useMemo(
-    () => loadSavedPlayer(),
-    []
+  const saved = getSavedPlayer();
+
+  const [queue, setQueue] = useState(
+    cleanTracks(saved.queue)
   );
 
-  const [queue, setQueue] = useState(initial.queue);
-
   const [currentIndex, setCurrentIndex] =
-    useState(initial.currentIndex);
+    useState(
+      getSafeIndex(
+        saved.currentIndex,
+        saved.queue?.length || 0
+      )
+    );
 
   const [playing, setPlaying] = useState(false);
 
@@ -54,32 +33,26 @@ export default function usePlayer() {
       ? queue[currentIndex]
       : null;
 
-  /*
-   * Persist queue and current track.
-   */
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          queue,
-          currentIndex
-        })
-      );
-    } catch {
-      // Ignore localStorage failures.
-    }
+    savePlayer({
+      queue,
+      currentIndex
+    });
   }, [queue, currentIndex]);
 
   const play = useCallback((track) => {
-    if (!track?.videoId) {
+    const clean = cleanTrack(track);
+
+    if (!clean) {
       return;
     }
 
     setQueue((currentQueue) => {
-      const existingIndex = currentQueue.findIndex(
-        (item) => item.videoId === track.videoId
-      );
+      const existingIndex =
+        currentQueue.findIndex(
+          (item) =>
+            item.videoId === clean.videoId
+        );
 
       if (existingIndex !== -1) {
         setCurrentIndex(existingIndex);
@@ -88,10 +61,12 @@ export default function usePlayer() {
 
       const nextQueue = [
         ...currentQueue,
-        track
+        clean
       ];
 
-      setCurrentIndex(nextQueue.length - 1);
+      setCurrentIndex(
+        nextQueue.length - 1
+      );
 
       return nextQueue;
     });
@@ -101,14 +76,16 @@ export default function usePlayer() {
 
   const playIndex = useCallback((index) => {
     setQueue((currentQueue) => {
-      if (
-        index < 0 ||
-        index >= currentQueue.length
-      ) {
+      const safeIndex = getSafeIndex(
+        index,
+        currentQueue.length
+      );
+
+      if (safeIndex === -1) {
         return currentQueue;
       }
 
-      setCurrentIndex(index);
+      setCurrentIndex(safeIndex);
       setPlaying(true);
 
       return currentQueue;
@@ -166,22 +143,25 @@ export default function usePlayer() {
   }, [queue.length]);
 
   const addToQueue = useCallback((track) => {
-    if (!track?.videoId) {
+    const clean = cleanTrack(track);
+
+    if (!clean) {
       return;
     }
 
     setQueue((currentQueue) => {
-      const exists = currentQueue.some(
-        (item) => item.videoId === track.videoId
-      );
-
-      if (exists) {
+      if (
+        containsTrack(
+          currentQueue,
+          clean.videoId
+        )
+      ) {
         return currentQueue;
       }
 
       return [
         ...currentQueue,
-        track
+        clean
       ];
     });
   }, []);
@@ -202,20 +182,29 @@ export default function usePlayer() {
               itemIndex !== index
           );
 
-        setCurrentIndex((currentIndexValue) => {
-          if (index < currentIndexValue) {
-            return currentIndexValue - 1;
-          }
+        setCurrentIndex(
+          (currentIndexValue) => {
+            if (index < currentIndexValue) {
+              return currentIndexValue - 1;
+            }
 
-          if (
-            index === currentIndexValue &&
-            currentIndexValue >= nextQueue.length
-          ) {
-            return nextQueue.length - 1;
-          }
+            if (
+              index === currentIndexValue
+            ) {
+              if (!nextQueue.length) {
+                setPlaying(false);
+                return -1;
+              }
 
-          return currentIndexValue;
-        });
+              return Math.min(
+                currentIndexValue,
+                nextQueue.length - 1
+              );
+            }
+
+            return currentIndexValue;
+          }
+        );
 
         return nextQueue;
       });
@@ -231,25 +220,22 @@ export default function usePlayer() {
 
   const replaceQueue = useCallback(
     (tracks, startIndex = 0) => {
-      const validTracks = Array.isArray(tracks)
-        ? tracks.filter(
-            (track) => track?.videoId
-          )
-        : [];
-
-      setQueue(validTracks);
+      const validTracks =
+        cleanTracks(tracks);
 
       if (!validTracks.length) {
+        setQueue([]);
         setCurrentIndex(-1);
         setPlaying(false);
         return;
       }
 
-      const safeIndex = Math.min(
-        Math.max(startIndex, 0),
-        validTracks.length - 1
+      const safeIndex = getSafeIndex(
+        startIndex,
+        validTracks.length
       );
 
+      setQueue(validTracks);
       setCurrentIndex(safeIndex);
       setPlaying(true);
     },
@@ -261,16 +247,13 @@ export default function usePlayer() {
     current,
     currentIndex,
     playing,
-
     play,
     playIndex,
     pause,
     resume,
     togglePlay,
-
     next,
     previous,
-
     addToQueue,
     removeFromQueue,
     clearQueue,
