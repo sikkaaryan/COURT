@@ -9,17 +9,22 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
 
-      includeAssets: ["favicon.svg"],
+      includeAssets: [
+        "favicon.svg",
+        "pwa-192.svg",
+        "pwa-512.svg"
+      ],
 
       manifest: {
         name: "Clutch",
         short_name: "Clutch",
-        description: "A custom music console built for your desk.",
+        description: "Your custom basketball-inspired music console.",
         theme_color: "#050505",
         background_color: "#050505",
         display: "standalone",
         orientation: "portrait",
         start_url: "/",
+        scope: "/",
 
         icons: [
           {
@@ -39,5 +44,15 @@ export default defineConfig({
         navigateFallback: "/index.html"
       }
     })
-  ]
+  ],
+
+  server: {
+    host: true,
+    port: 5173
+  },
+
+  build: {
+    outDir: "dist",
+    sourcemap: false
+  }
 });
