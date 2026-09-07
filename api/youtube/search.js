@@ -1,15 +1,20 @@
-export default async function handler(req, res) {
+export default async function handler(
+  req,
+  res
+) {
   if (req.method !== "GET") {
     return res.status(405).json({
       error: "Method not allowed."
     });
   }
 
-  const apiKey = process.env.YOUTUBE_API_KEY;
+  const apiKey =
+    process.env.YOUTUBE_API_KEY;
 
   if (!apiKey) {
     return res.status(500).json({
-      error: "YouTube API key is not configured."
+      error:
+        "YouTube API key is not configured."
     });
   }
 
@@ -20,13 +25,24 @@ export default async function handler(req, res) {
 
   if (!query) {
     return res.status(400).json({
-      error: "Search query is required."
+      error:
+        "Search query is required."
+    });
+  }
+
+  if (query.length > 200) {
+    return res.status(400).json({
+      error:
+        "Search query is too long."
     });
   }
 
   const maxResults = Math.min(
     Math.max(
-      Number.parseInt(req.query.maxResults || "20", 10),
+      Number.parseInt(
+        req.query.maxResults || "20",
+        10
+      ),
       1
     ),
     50
@@ -46,53 +62,76 @@ export default async function handler(req, res) {
       `https://www.googleapis.com/youtube/v3/search?${params.toString()}`
     );
 
-    if (!response.ok) {
-      const details = await response.text();
-
-      console.error(
-        "YouTube search failed:",
-        details
+    const data =
+      await response.json().catch(
+        () => ({})
       );
 
-      return res.status(response.status).json({
-        error: "YouTube search failed."
+    if (!response.ok) {
+      console.error(
+        "YouTube search failed:",
+        data
+      );
+
+      return res.status(
+        response.status
+      ).json({
+        error:
+          data.error?.message ||
+          "YouTube search failed."
       });
     }
 
-    const data = await response.json();
+    const results =
+      (data.items || [])
+        .filter(
+          (item) =>
+            item.id?.videoId
+        )
+        .map((item) => ({
+          videoId:
+            item.id.videoId,
 
-    const results = (data.items || [])
-      .filter((item) => item.id?.videoId)
-      .map((item) => ({
-        videoId: item.id.videoId,
+          title:
+            item.snippet?.title ||
+            "Untitled",
 
-        title:
-          item.snippet?.title || "Untitled",
+          channel:
+            item.snippet
+              ?.channelTitle ||
+            "",
 
-        channel:
-          item.snippet?.channelTitle || "",
+          description:
+            item.snippet
+              ?.description ||
+            "",
 
-        description:
-          item.snippet?.description || "",
+          thumbnail:
+            item.snippet?.thumbnails
+              ?.high?.url ||
+            item.snippet?.thumbnails
+              ?.medium?.url ||
+            item.snippet?.thumbnails
+              ?.default?.url ||
+            null,
 
-        thumbnail:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.medium?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          null,
-
-        publishedAt:
-          item.snippet?.publishedAt || null
-      }));
+          publishedAt:
+            item.snippet
+              ?.publishedAt ||
+            null
+        }));
 
     return res.status(200).json({
       results,
 
       nextPageToken:
-        data.nextPageToken || null,
+        data.nextPageToken ||
+        null,
 
       totalResults:
-        data.pageInfo?.totalResults || results.length
+        data.pageInfo
+          ?.totalResults ||
+        results.length
     });
   } catch (error) {
     console.error(
@@ -101,7 +140,8 @@ export default async function handler(req, res) {
     );
 
     return res.status(500).json({
-      error: "Failed to search YouTube."
+      error:
+        "Failed to search YouTube."
     });
   }
 }
