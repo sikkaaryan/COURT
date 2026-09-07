@@ -1,42 +1,85 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState
+} from "react";
 import api from "../lib/api";
+import {
+  normalizePlaylists,
+  normalizeTracks
+} from "../lib/normalize";
 
-export default function useYouTube() {
-  const [playlists, setPlaylists] = useState([]);
-  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
-  const [playlistError, setPlaylistError] = useState(null);
+export default function useYouTube(
+  isAuthenticated = false
+) {
+  const [playlists, setPlaylists] =
+    useState([]);
 
-  const [playlistItems, setPlaylistItems] = useState({});
-  const [loadingItems, setLoadingItems] = useState({});
-  const [itemErrors, setItemErrors] = useState({});
+  const [playlistItems, setPlaylistItems] =
+    useState({});
 
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState(null);
+  const [loadingPlaylists, setLoadingPlaylists] =
+    useState(false);
 
-  const loadPlaylists = useCallback(async () => {
-    setLoadingPlaylists(true);
-    setPlaylistError(null);
+  const [loadingItems, setLoadingItems] =
+    useState({});
 
-    try {
-      const data = await api.getPlaylists();
+  const [playlistError, setPlaylistError] =
+    useState(null);
 
-      setPlaylists(data.playlists || []);
+  const [itemErrors, setItemErrors] =
+    useState({});
 
-      return data.playlists || [];
-    } catch (error) {
-      console.error("Failed to load playlists:", error);
+  const [searchResults, setSearchResults] =
+    useState([]);
 
-      setPlaylistError(error.message);
+  const [searchLoading, setSearchLoading] =
+    useState(false);
 
-      return [];
-    } finally {
-      setLoadingPlaylists(false);
-    }
-  }, []);
+  const [searchError, setSearchError] =
+    useState(null);
 
-  const loadPlaylistItems = useCallback(
-    async (playlistId) => {
+  const loadPlaylists =
+    useCallback(async () => {
+      if (!isAuthenticated) {
+        setPlaylists([]);
+        return [];
+      }
+
+      setLoadingPlaylists(true);
+      setPlaylistError(null);
+
+      try {
+        const data =
+          await api.getPlaylists();
+
+        const normalized =
+          normalizePlaylists(
+            data.playlists
+          );
+
+        setPlaylists(normalized);
+
+        return normalized;
+      } catch (error) {
+        console.error(
+          "Failed to load playlists:",
+          error
+        );
+
+        setPlaylistError(
+          error.message ||
+            "Unable to load playlists."
+        );
+
+        return [];
+      } finally {
+        setLoadingPlaylists(false);
+      }
+    }, [isAuthenticated]);
+
+  const loadPlaylistItems =
+    useCallback(async (playlistId) => {
       if (!playlistId) {
         return [];
       }
@@ -52,18 +95,20 @@ export default function useYouTube() {
       }));
 
       try {
-        const data = await api.getPlaylistItems(
-          playlistId
-        );
+        const data =
+          await api.getPlaylistItems(
+            playlistId
+          );
 
-        const items = data.items || [];
+        const tracks =
+          normalizeTracks(data.items);
 
         setPlaylistItems((current) => ({
           ...current,
-          [playlistId]: items
+          [playlistId]: tracks
         }));
 
-        return items;
+        return tracks;
       } catch (error) {
         console.error(
           "Failed to load playlist items:",
@@ -72,7 +117,9 @@ export default function useYouTube() {
 
         setItemErrors((current) => ({
           ...current,
-          [playlistId]: error.message
+          [playlistId]:
+            error.message ||
+            "Unable to load playlist."
         }));
 
         return [];
@@ -82,53 +129,79 @@ export default function useYouTube() {
           [playlistId]: false
         }));
       }
-    },
-    []
-  );
+    }, []);
 
-  const search = useCallback(async (query) => {
-    const cleanQuery = query?.trim();
+  const search =
+    useCallback(async (query) => {
+      const cleanQuery =
+        query?.trim() || "";
 
-    if (!cleanQuery) {
+      if (!cleanQuery) {
+        setSearchResults([]);
+        setSearchError(null);
+        return [];
+      }
+
+      setSearchLoading(true);
+      setSearchError(null);
+
+      try {
+        const data =
+          await api.search(cleanQuery);
+
+        const results =
+          normalizeTracks(
+            data.results || []
+          );
+
+        setSearchResults(results);
+
+        return results;
+      } catch (error) {
+        console.error(
+          "YouTube search failed:",
+          error
+        );
+
+        setSearchResults([]);
+        setSearchError(
+          error.message ||
+            "Search failed."
+        );
+
+        return [];
+      } finally {
+        setSearchLoading(false);
+      }
+    }, []);
+
+  const clearSearch =
+    useCallback(() => {
       setSearchResults([]);
       setSearchError(null);
-      return [];
-    }
-
-    setSearchLoading(true);
-    setSearchError(null);
-
-    try {
-      const data = await api.search(cleanQuery);
-
-      const results = data.results || [];
-
-      setSearchResults(results);
-
-      return results;
-    } catch (error) {
-      console.error("YouTube search failed:", error);
-
-      setSearchError(error.message);
-      setSearchResults([]);
-
-      return [];
-    } finally {
-      setSearchLoading(false);
-    }
-  }, []);
+    }, []);
 
   useEffect(() => {
-    loadPlaylists();
-  }, [loadPlaylists]);
+    if (isAuthenticated) {
+      loadPlaylists();
+    } else {
+      setPlaylists([]);
+      setPlaylistItems({});
+      setPlaylistError(null);
+    }
+  }, [
+    isAuthenticated,
+    loadPlaylists
+  ]);
 
   return {
     playlists,
-    loadingPlaylists,
-    playlistError,
-
     playlistItems,
+
+    loadingPlaylists,
     loadingItems,
+
+    playlistError,
     itemErrors,
 
     searchResults,
@@ -137,6 +210,8 @@ export default function useYouTube() {
 
     loadPlaylists,
     loadPlaylistItems,
-    search
+
+    search,
+    clearSearch
   };
 }
